@@ -4,6 +4,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+
 from tracy import perf_metrics_common as mc
 from tracy.perf_counter_analysis import COUNTER_TYPE_NAMES, PERF_COUNTER_CSV_HEADERS
 
@@ -80,3 +82,12 @@ def test_csv_headers_cover_every_label_with_four_stats():
     assert len(PERF_COUNTER_CSV_HEADERS) == 4 * len(mc.METRIC_LABELS)
     assert "Avg FPU util on full grid (%)" in PERF_COUNTER_CSV_HEADERS
     assert "Stall Overlap T0 Min (ratio)" in PERF_COUNTER_CSV_HEADERS
+
+
+def test_tech_report_catalogue_lists_every_metric():
+    # The tech report is the single human-readable catalogue; fail when a metric is added to the
+    # engine without documenting it (or renamed without updating the doc).
+    report = (Path(__file__).resolve().parents[3] / "tech_reports" / "PerfCounters" / "perf-counters.md").read_text()
+    for key, label in mc.METRIC_LABELS.items():
+        assert f"`{key}`" in report, f"tech report is missing metric key {key}"
+        assert label in report, f"tech report is missing metric label {label}"
