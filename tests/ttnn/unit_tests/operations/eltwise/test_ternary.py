@@ -489,3 +489,79 @@ def test_ternary_addcmul_cache_hit_refreshes_operand_addresses(device):
     assert_with_pcc(reference(2), ttnn.to_torch(out1).float(), 0.99)
 
     device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    "pred_shape_1, pred_shape_2, tf_shape",
+    [
+        ((4, 1, 32, 32), (1, 4, 32, 32), (4, 4, 32, 32)),
+        ((2, 2, 1, 32, 32), (2, 1, 2, 32, 32), (2, 2, 2, 32, 32)),
+        ((2, 2, 1, 32, 32), (1, 2, 2, 32, 32), (2, 2, 2, 32, 32)),
+    ],
+)
+def test_ternary_where_cache_hit_rederives_interior_dim_strides(device, pred_shape_1, pred_shape_2, tf_shape):
+    """#54235: same-key predicates with different N/C/D factoring must share one entry and stay exact."""
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    torch.manual_seed(0)
+    t_h = torch.randn(*tf_shape, dtype=torch.bfloat16)
+    f_h = torch.randn(*tf_shape, dtype=torch.bfloat16)
+    p1_h = torch.randint(0, 2, pred_shape_1).to(torch.bfloat16)
+    p2_h = torch.randint(0, 2, pred_shape_2).to(torch.bfloat16)
+
+    t = ttnn.from_torch(t_h, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    f = ttnn.from_torch(f_h, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    p1 = ttnn.from_torch(p1_h, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    p2 = ttnn.from_torch(p2_h, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    out_1 = ttnn.to_torch(ttnn.where(p1, t, f)).float()
+    entries_after_first = device.num_program_cache_entries()
+    assert entries_after_first == 1, f"expected 1 cache entry after first where, got {entries_after_first}"
+
+    out_2 = ttnn.to_torch(ttnn.where(p2, t, f)).float()
+    assert device.num_program_cache_entries() == entries_after_first, (
+        "differently-factored interior dims must SHARE the cached program under the shape-blind key; "
+        "an extra entry means padded_shape leaked back into compute_program_hash."
+    )
+
+    assert_with_pcc(torch.where(p1_h.bool(), t_h, f_h).float(), out_1, 0.999)
+    assert_with_pcc(torch.where(p2_h.bool(), t_h, f_h).float(), out_2, 0.999)
+
+    device.disable_and_clear_program_cache()
+
+
+def test_ternary_where_cache_hit_rederives_output_worksplit(device):
+    """#54235: same per-tensor hash + different broadcast output shape must share one entry and stay exact."""
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    torch.manual_seed(0)
+    # Both cases: pred vol=4096, true vol=4096, false vol=1024, H=W=32; broadcast max differs.
+    cases = [
+        ((4, 1, 32, 32), (1, 4, 32, 32), (1, 1, 32, 32)),  # out = (4,4,32,32)
+        ((4, 1, 32, 32), (4, 1, 32, 32), (1, 1, 32, 32)),  # out = (4,1,32,32)
+    ]
+
+    entries_after_first = None
+    for i, (pred_shape, true_shape, false_shape) in enumerate(cases):
+        pred_h = torch.randint(0, 2, pred_shape).to(torch.bfloat16)
+        true_h = torch.randn(*true_shape, dtype=torch.bfloat16)
+        false_h = torch.randn(*false_shape, dtype=torch.bfloat16)
+
+        p = ttnn.from_torch(pred_h, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        t = ttnn.from_torch(true_h, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        f = ttnn.from_torch(false_h, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        out = ttnn.to_torch(ttnn.where(p, t, f)).float()
+
+        if i == 0:
+            entries_after_first = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries_after_first, (
+                "same per-tensor hash + different output shape must reuse one entry -- extra means "
+                "the output-derived work-split leaked into compute_program_hash."
+            )
+
+        assert_with_pcc(torch.where(pred_h.bool(), true_h, false_h).float(), out, 0.999)
+
+    device.disable_and_clear_program_cache()
