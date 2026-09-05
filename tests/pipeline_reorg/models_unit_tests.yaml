@@ -501,11 +501,16 @@
     bh_quietbox_2:
       timeout: 15
       tier: 1
-    # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
-    # ethernet / fabric hang on Blackhole Galaxy that surfaces during
-    # `test_experts[blackhole-decode-1x32]` and cascades across all 32 devices.
-    # Needs separate investigation (likely Galaxy fabric infra, not gemma4
-    # code). Re-enable once root-caused.
+    # bh_galaxy: disabled — ROOT-CAUSED (galaxy bring-up, 2026-09-03): opening a
+    # (1,32) LINE view over the full 8x4 BH Galaxy is structurally broken — the
+    # 32-device linear all-gather hangs on-device (fabric routers handshake
+    # toward out-of-set links), reproduced natively and independent of board
+    # health; a killed hang wedges eth cores (needs tt-smi -r). These unit
+    # params open exactly that 1x32 mesh (`test_experts[blackhole-decode-1x32]`).
+    # Do NOT re-enable on runner health alone; needs a working 1x32 line CCL or
+    # a blessed (4,8)-parent/submesh path. Triage dividing line: init-time
+    # unordered_map::at throw = board-specific untrained eth link (tt-smi -r
+    # retrains); hang at the first 32-wide gather = this structural issue.
     # bh_galaxy:
     #   timeout: 20
     #   tier: 2
@@ -536,9 +541,10 @@
     bh_quietbox_2:
       timeout: 15
       tier: 1
-    # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
-    # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
-    # prefill on 31B). Needs separate investigation; re-enable once root-caused.
+    # bh_galaxy: disabled — same structural (1,32) line-view fabric hang as the
+    # Gemma-4-26B-A4B entry above (root-caused 2026-09-03, see that comment for
+    # the full finding and the triage dividing line; on 31B it surfaces during
+    # sliding-1x32 attention prefill). Do NOT re-enable on runner health alone.
     # bh_galaxy:
     #   timeout: 20
     #   tier: 2
